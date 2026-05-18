@@ -202,16 +202,55 @@ app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
 });
 
-app.post("/webhook/razorpay", express.json(), (req, res) => {
+app.post("/webhook/razorpay", express.raw({ type: "*/*" }), async (req, res) => {
+  try {
+    const webhookSignature = req.headers["x-razorpay-signature"];
+    const webhookSecret = process.env.WEBHOOK_SECRET;
 
-  console.log("Webhook received");
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(req.body)
+      .digest("hex");
 
-  console.log(req.body);
+    if (webhookSignature !== expectedSignature) {
+      console.log("Invalid webhook signature");
+      return res.status(400).json({
+        success: false,
+        error: "Invalid webhook signature",
+      });
+    }
 
-  res.status(200).json({
-    success: true
-  });
+    const payload = JSON.parse(req.body.toString());
 
+    console.log("Webhook verified:", payload.event);
+
+    const paymentEntity = payload.payload?.payment?.entity;
+
+    if (
+      (payload.event === "payment.captured" || payload.event === "qr_code.credited") &&
+      paymentEntity &&
+      paymentEntity.amount === 500
+    ) {
+      console.log("₹5 payment received. Releasing water...");
+
+      const espResponse = await axios.get(`http://${ESP_IP}/water`, {
+        timeout: 7000,
+      });
+
+      console.log("ESP response:", espResponse.data);
+    }
+
+    res.status(200).json({
+      success: true,
+    });
+
+  } catch (err) {
+    console.error("Webhook error:", err.message);
+
+    res.status(500).json({
+      success: false,
+    });
+  }
 });
 
 app.listen(PORT, () => {
