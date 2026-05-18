@@ -1,3 +1,4 @@
+const API_BASE = "https://new-water-atm.onrender.com";
 const payBtn = document.getElementById("payBtn");
 const statusMessage = document.getElementById("statusMessage");
 
@@ -12,7 +13,7 @@ async function startPayment() {
     setStatus("Creating secure order...");
 
     // Step 1: Ask backend to create fixed ₹5 order
-    const orderRes = await fetch("/create-order", {
+    const orderRes = await fetch(`${API_BASE}/create-order`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -35,7 +36,7 @@ async function startPayment() {
           setStatus("Verifying payment and releasing water...");
 
           // Step 3: Verify payment at backend, then trigger ESP8266 /water
-          const verifyRes = await fetch("/verify-payment", {
+          const verifyRes = await fetch(`${API_BASE}/verify-payment`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
