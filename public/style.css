@@ -1,0 +1,104 @@
+:root {
+  --bg: #f4f8fb;
+  --card: #ffffff;
+  --text: #1f2a37;
+  --muted: #5b6777;
+  --primary: #0077cc;
+  --primary-hover: #005fa3;
+  --ok: #0b8f44;
+  --error: #c62828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: linear-gradient(180deg, #eef6ff 0%, var(--bg) 100%);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.container {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--card);
+  border-radius: 14px;
+  padding: 28px 22px;
+  box-shadow: 0 10px 30px rgba(22, 40, 70, 0.12);
+  text-align: center;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 1.8rem;
+}
+
+.price {
+  margin: 0 0 20px;
+  font-size: 1.1rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.pay-btn {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 13px 16px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.pay-btn:hover {
+  background: var(--primary-hover);
+}
+
+.pay-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.status {
+  min-height: 22px;
+  margin: 16px 0 0;
+  font-weight: 700;
+}
+
+.status.success {
+  color: var(--ok);
+}
+
+.status.error {
+  color: var(--error);
+}
+
+.hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 1.55rem;
+  }
+
+  .card {
+    padding: 22px 16px;
+  }
+}
+
