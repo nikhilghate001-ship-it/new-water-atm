@@ -2,10 +2,16 @@
  * Smart Water ATM Backend
  * - Creates Razorpay orders (fixed amount: ₹5 => 500 paise)
  * - Verifies Razorpay payment signature server-side
- * - After successful verification, triggers ESP8266 water release
+ * - Sets an in-memory water release command for ESP8266 to poll
+ *
+ * Flow:
+ *   Frontend payment success -> POST /verify-payment -> backend sets flag
+ *   -> ESP polls GET /water-status -> relay ON -> ESP calls POST /water-done
  *
  * Important:
  * - Razorpay KEY_SECRET must NEVER be exposed to the frontend.
+ * - In-memory flag is fine for demo. For production, use a database
+ *   (Firebase, MongoDB, etc.) because a server restart will reset the flag.
  */
 
 require("dotenv").config();
@@ -13,7 +19,6 @@ require("dotenv").config();
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
-const axios = require("axios");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 
@@ -27,7 +32,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname)));
 
 // Validate required env vars on startup (fail fast)
-const REQUIRED_VARS = ["KEY_ID", "KEY_SECRET", "ESP_IP"];
+const REQUIRED_VARS = ["KEY_ID", "KEY_SECRET"];
 for (const v of REQUIRED_VARS) {
   if (!process.env[v]) {
     console.error(`Missing required environment variable: ${v}`);
@@ -35,7 +40,6 @@ for (const v of REQUIRED_VARS) {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
-const ESP_IP = process.env.ESP_IP;
 const KEY_ID = process.env.KEY_ID;
 const KEY_SECRET = process.env.KEY_SECRET;
 
@@ -45,7 +49,16 @@ const razorpay = new Razorpay({
   key_secret: KEY_SECRET,
 });
 
-const WATER_RELEASE_URL = `http://${ESP_IP}/water`;
+// In-memory water release command (demo only — use DB in production)
+let waterCommand = {
+  releaseWater: false,
+  amount: 0,
+  paymentId: null,
+  orderId: null,
+  createdAt: null,
+};
+
+let lastRelease = null;
 
 /**
  * GET /
@@ -93,7 +106,7 @@ app.post("/create-order", async (req, res) => {
 
 /**
  * POST /verify-payment
- * Verifies Razorpay signature and only then triggers ESP8266 water release.
+ * Verifies Razorpay signature and sets in-memory water release command.
  *
  * Body:
  * {
@@ -127,68 +140,21 @@ app.post("/verify-payment", async (req, res) => {
 
     console.log("Payment verified");
 
-    let espResponse;
-    try {
-      // Call ESP with strict timeout after payment verification succeeds.
-      espResponse = await axios.get(WATER_RELEASE_URL, { timeout: 7000 });
-    } catch (espErr) {
-      console.error("ESP water release failed:", espErr?.response?.data || espErr.message || espErr);
+    waterCommand = {
+      releaseWater: true,
+      amount: 500,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id,
+      createdAt: new Date().toISOString(),
+    };
 
-      try {
-        await razorpay.payments.refund(razorpay_payment_id, {
-          amount: 500,
-          notes: {
-            reason: "Water release failed",
-          },
-        });
-        console.log("Refund initiated");
-      } catch (refundErr) {
-        console.error("Refund failed:", refundErr?.response?.data || refundErr.message || refundErr);
-      }
+    console.log("Water command created:", waterCommand);
 
-      return res.status(502).json({
-        success: false,
-        message: "Water release failed. Refund initiated.",
-        error: "Water release failed. Refund initiated.",
-      });
-    }
-
-    const espBody = typeof espResponse.data === "string" ? espResponse.data : JSON.stringify(espResponse.data);
-    const isWaterReleaseSuccess =
-      espResponse.status === 200 && espBody.toLowerCase().includes("water released");
-
-    if (!isWaterReleaseSuccess) {
-      console.error("ESP water release failed:", {
-        status: espResponse.status,
-        data: espResponse.data,
-      });
-
-      try {
-        await razorpay.payments.refund(razorpay_payment_id, {
-          amount: 500,
-          notes: {
-            reason: "Water release failed",
-          },
-        });
-        console.log("Refund initiated");
-      } catch (refundErr) {
-        console.error("Refund failed:", refundErr?.response?.data || refundErr.message || refundErr);
-      }
-
-      return res.status(502).json({
-        success: false,
-        message: "Water release failed. Refund initiated.",
-        error: "Water release failed. Refund initiated.",
-      });
-    }
-
-    console.log("ESP water release success");
     return res.json({
       success: true,
-      message: "Payment verified and water released successfully.",
     });
   } catch (err) {
-    console.error("Error verifying payment / releasing water:", err?.response?.data || err.message || err);
+    console.error("Error verifying payment:", err?.response?.data || err.message || err);
 
     return res.status(500).json({
       success: false,
@@ -197,60 +163,84 @@ app.post("/verify-payment", async (req, res) => {
   }
 });
 
+/**
+ * GET /water-status
+ * ESP8266 polls this route to check if water should be released.
+ */
+app.get("/water-status", (req, res) => {
+  console.log("ESP checked status:", {
+    releaseWater: waterCommand.releaseWater,
+    paymentId: waterCommand.paymentId,
+  });
+
+  res.json({
+    releaseWater: waterCommand.releaseWater,
+    amount: waterCommand.amount,
+    paymentId: waterCommand.paymentId,
+    orderId: waterCommand.orderId,
+  });
+});
+
+/**
+ * POST /water-done
+ * ESP8266 calls this after relay ON to confirm water was released.
+ *
+ * Body:
+ * {
+ *   paymentId: "...",
+ *   status: "released"
+ * }
+ */
+app.post("/water-done", (req, res) => {
+  const { paymentId, status } = req.body || {};
+
+  if (!paymentId || !status) {
+    return res.status(400).json({
+      error: "Missing paymentId or status.",
+    });
+  }
+
+  waterCommand.releaseWater = false;
+
+  lastRelease = {
+    paymentId,
+    status,
+    releasedAt: new Date().toISOString(),
+  };
+
+  console.log("ESP confirmed water released:", lastRelease);
+
+  res.json({
+    success: true,
+    lastRelease,
+  });
+});
+
+/**
+ * POST /test-release
+ * Development-only route to trigger water release without payment.
+ */
+app.post("/test-release", (req, res) => {
+  waterCommand = {
+    releaseWater: true,
+    amount: 500,
+    paymentId: `test-${Date.now()}`,
+    orderId: `test-order-${Date.now()}`,
+    createdAt: new Date().toISOString(),
+  };
+
+  console.log("Test water command created:", waterCommand);
+
+  res.json({
+    success: true,
+    message: "Test water release command set.",
+    waterCommand,
+  });
+});
+
 // Fallback 404
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
-});
-
-app.post("/webhook/razorpay", express.raw({ type: "*/*" }), async (req, res) => {
-  try {
-    const webhookSignature = req.headers["x-razorpay-signature"];
-    const webhookSecret = process.env.WEBHOOK_SECRET;
-
-    const expectedSignature = crypto
-      .createHmac("sha256", webhookSecret)
-      .update(req.body)
-      .digest("hex");
-
-    if (webhookSignature !== expectedSignature) {
-      console.log("Invalid webhook signature");
-      return res.status(400).json({
-        success: false,
-        error: "Invalid webhook signature",
-      });
-    }
-
-    const payload = JSON.parse(req.body.toString());
-
-    console.log("Webhook verified:", payload.event);
-
-    const paymentEntity = payload.payload?.payment?.entity;
-
-    if (
-      (payload.event === "payment.captured" || payload.event === "qr_code.credited") &&
-      paymentEntity &&
-      paymentEntity.amount === 500
-    ) {
-      console.log("₹5 payment received. Releasing water...");
-
-      const espResponse = await axios.get(`http://${ESP_IP}/water`, {
-        timeout: 7000,
-      });
-
-      console.log("ESP response:", espResponse.data);
-    }
-
-    res.status(200).json({
-      success: true,
-    });
-
-  } catch (err) {
-    console.error("Webhook error:", err.message);
-
-    res.status(500).json({
-      success: false,
-    });
-  }
 });
 
 app.listen(PORT, () => {
